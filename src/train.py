@@ -43,7 +43,7 @@ def train():
     # 3 (Умеренная): 3.0 (Оставим высокой, так как кустов мало)
     # 4 (Плотная): 1.5 (Деревья определяются хорошо, оставляем как есть)
 
-    class_weights = torch.tensor([0.0, 2.0, 1.0, 3.0, 1.5]).to(config.DEVICE)
+    class_weights = torch.tensor([0.0, 1.0, 1.64, 2.85, 1.25]).to(config.DEVICE)
 
     criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=0)
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)

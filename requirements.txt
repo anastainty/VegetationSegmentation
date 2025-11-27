@@ -1,0 +1,17 @@
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio
+rasterio>=1.3.0
+shapely>=2.0.0
+geopandas
+numpy>=1.24.0
+pandas>=2.0.0
+opencv-python-headless
+scikit-image>=0.20.0
+Pillow
+scikit-learn>=1.2.0
+tqdm
+matplotlib>=3.7.0
+seaborn
+jupyter
+notebook

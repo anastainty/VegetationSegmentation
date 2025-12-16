@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class DoubleConv(nn.Module):
     """(conv => BN => ReLU) * 2"""
+
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.double_conv = nn.Sequential(
@@ -18,8 +20,10 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
+
 class Down(nn.Module):
     """Спуск"""
+
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
@@ -30,8 +34,10 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
+
 class Up(nn.Module):
     """Подъем"""
+
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
         if bilinear:
@@ -49,6 +55,7 @@ class Up(nn.Module):
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
+
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
@@ -56,6 +63,7 @@ class OutConv(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
 
 class UNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
@@ -74,6 +82,10 @@ class UNet(nn.Module):
         self.up2 = Up(512, 256 // factor, bilinear)
         self.up3 = Up(256, 128 // factor, bilinear)
         self.up4 = Up(128, 64, bilinear)
+
+        # --- DROPOUT для борьбы с переобучением ---
+        self.dropout = nn.Dropout(p=0.5)
+
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
@@ -86,4 +98,8 @@ class UNet(nn.Module):
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
+
+        # Применяем Dropout перед выходом
+        x = self.dropout(x)
+
         return self.outc(x)

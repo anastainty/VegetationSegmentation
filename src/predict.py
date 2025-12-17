@@ -116,7 +116,7 @@ def predict_full_map():
 
                     # Перевод в тензор PyTorch
                     tensor = torch.from_numpy(input_chunk.transpose(2, 0, 1)).float()
-                    tensor = tensor.unsqueeze(0).to(config.DEVICE)  # Добавляем Batch dimension -> (1, 6, 256, 256)
+                    tensor = tensor.unsqueeze(0).to(config.DEVICE)
 
                     # --- ПРЕДСКАЗАНИЕ ---
                     with torch.no_grad():
@@ -124,7 +124,6 @@ def predict_full_map():
                         # Берем индекс класса с максимальной вероятностью (Argmax)
                         pred = torch.argmax(output, dim=1).cpu().numpy()[0]
 
-                    # Убираем паддинг (обрезаем лишнее, что добавили выше)
                     pred_cut = pred[:window_h, :window_w]
 
                     # Записываем результат в файл

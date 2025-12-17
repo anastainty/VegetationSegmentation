@@ -41,12 +41,6 @@ def train():
     model = UNet(n_channels=config.NUM_CHANNELS, n_classes=config.NUM_CLASSES)
     model = model.to(config.DEVICE)
 
-    # --- ЖЕСТКАЯ БАЛАНСИРОВКА КЛАССОВ ---
-    # 0: Фон (игнор)
-    # 1: Не растительность (Асфальт) -> 4.0 (ОЧЕНЬ ВАЖНО, чтобы не путать с травой)
-    # 2: Слабая -> 1.0
-    # 3: Умеренная -> 1.0
-    # 4: Плотная -> 1.0
     class_weights = torch.tensor([0.34, 1.36, 2.24, 3.88, 1.7]).to(config.DEVICE)
 
     criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=0)
@@ -67,7 +61,6 @@ def train():
     patience_counter = 0
 
     # 3. Цикл обучения
-    # Совет: В config.py теперь можно поставить NUM_EPOCHS хоть 100 или 200
     for epoch in range(config.NUM_EPOCHS):
         model.train()
         running_loss = 0.0

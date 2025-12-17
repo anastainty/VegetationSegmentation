@@ -99,7 +99,6 @@ class VegetationDataset(Dataset):
         # Склеиваем: 5 цветов + 1 высота = 6 каналов
         combined_input = np.concatenate((img_patch, dsm_patch), axis=2)
 
-        # .copy() обязателен после np.flip, иначе PyTorch ругается на negative strides
         combined_tensor = torch.from_numpy(combined_input.transpose(2, 0, 1).copy()).float()
         mask_tensor = torch.from_numpy(mask_patch.copy()).long()
 

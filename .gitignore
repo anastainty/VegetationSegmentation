@@ -1,5 +1,4 @@
 data
 src/check_classes.py
-src/unet_vegetation_model.pth
 .venv
 .idea

@@ -10,128 +10,131 @@ from model import UNet
 
 
 def predict_full_map():
-    # 1. Настройки путей
-    # Создаем папку для результата, если нет
+    # 1. Настройки
     os.makedirs(config.IMAGES_OUTPUT_DIR, exist_ok=True)
     OUTPUT_PATH = os.path.join(config.IMAGES_OUTPUT_DIR, "predicted_vegetation_map.tif")
+    ROI_PATH = os.path.join("data", "processed", "masks", "roi_mask.tif")
 
     print(f"--- Старт предсказания ---")
     print(f"Устройство: {config.DEVICE}")
-    print(f"Сохранение в: {OUTPUT_PATH}")
 
-    # 2. Загружаем модель
+    # 2. Загрузка модели
     print("Загрузка модели...")
     model = UNet(n_channels=config.NUM_CHANNELS, n_classes=config.NUM_CLASSES)
 
-    # Загружаем веса на CPU для надежности, потом отправляем на устройство
+    model_path = "unet_best_f1_model.pth"  # Берем лучшую модель по F1
+    if not os.path.exists(model_path):
+        print(f"⚠️ Файл {model_path} не найден, ищем старый...")
+        model_path = "unet_vegetation_model.pth"
+
     try:
-        model.load_state_dict(torch.load("unet_vegetation_model.pth", map_location=torch.device('cpu')))
+        model.load_state_dict(torch.load(model_path, map_location=config.DEVICE))
+        print(f"Загружены веса из: {model_path}")
     except FileNotFoundError:
-        print("❌ Ошибка: Файл 'unet_vegetation_model.pth' не найден!")
-        print("Сначала запусти train.py, чтобы обучить модель.")
+        print("❌ Ошибка: Нет обученной модели.")
         return
 
     model.to(config.DEVICE)
     model.eval()
 
-    # 3. Открываем исходные файлы
+    # 3. Открываем файлы
+    # Открываем также ROI маску, чтобы пропускать пустоту
+    roi_exists = os.path.exists(ROI_PATH)
+    if not roi_exists:
+        print("⚠️ Маска ROI не найдена. Будет обработано все изображение (долго).")
+
     with rasterio.open(config.IMAGE_PATH) as src_img, \
             rasterio.open(config.DSM_PATH) as src_dsm:
 
-        # Копируем метаданные исходного снимка
-        meta = src_img.meta.copy()
-        height, width = src_img.height, src_img.width
+        # Если есть ROI, открываем его
+        src_roi = rasterio.open(ROI_PATH) if roi_exists else None
 
-        # ОБНОВЛЕНИЕ МЕТАДАННЫХ:
-        # count=1 (один канал - карта классов)
-        # dtype=uint8 (целые числа 0-255)
-        # nodata=255 (значение для пустоты/прозрачности)
+        meta = src_img.meta.copy()
+        # Выходной файл: 1 канал, 255 = прозрачность/фон
         meta.update(count=1, dtype=rasterio.uint8, nodata=255)
 
-        print(f"Размер изображения: {width}x{height}")
+        print(f"Размер изображения: {src_img.width}x{src_img.height}")
 
-        # Создаем выходной файл
+        # Глобальная статистика DSM (для нормализации)
+        print("Вычисляем статистику высот...")
+        dsm_ov = src_dsm.read(1, out_shape=(1, src_dsm.height // 10, src_dsm.width // 10))
+        valid_dsm = dsm_ov > -100
+        d_min = dsm_ov[valid_dsm].min() if valid_dsm.any() else 0
+        d_max = dsm_ov[valid_dsm].max() if valid_dsm.any() else 1
+
+        # Подготовка ROI маски (читаем в память, она легкая)
+        if src_roi:
+            roi_mask_small = src_roi.read(1)
+            scale_h = src_img.height / src_roi.height
+            scale_w = src_img.width / src_roi.width
+
+        patch_size = config.PATCH_SIZE
+
+        # --- СБОР СПИСКА ВАЛИДНЫХ ПАТЧЕЙ ---
+        # Вместо тупого перебора всех координат, сначала проверим их по маске
+        valid_coords = []
+        for y in range(0, src_img.height, patch_size):
+            for x in range(0, src_img.width, patch_size):
+                if src_roi:
+                    # Проверяем, попадает ли патч в белую зону маски
+                    y_s = int(y / scale_h)
+                    x_s = int(x / scale_w)
+                    h_s = int(patch_size / scale_h)
+                    w_s = int(patch_size / scale_w)
+                    chunk = roi_mask_small[y_s:y_s + h_s, x_s:x_s + w_s]
+
+                    # Если кусок полностью черный (0) - пропускаем
+                    if not np.any(chunk):
+                        continue
+                valid_coords.append((y, x))
+
+        print(
+            f"Будет обработано патчей: {len(valid_coords)} (Сэкономлено: {(src_img.height // patch_size) * (src_img.width // patch_size) - len(valid_coords)})")
+
         with rasterio.open(OUTPUT_PATH, 'w', **meta) as dst:
-            patch_size = config.PATCH_SIZE
-            # Считаем общее количество патчей для прогресс-бара
-            total_patches = (height // patch_size + 1) * (width // patch_size + 1)
-            pbar = tqdm(total=total_patches, desc="Генерация карты")
+            # Инициализируем файл значением 255 (прозрачность)
+            # Чтобы пропущенные куски остались прозрачными
+            # (Для больших файлов это может быть медленно, но надежно)
+            # Если файл слишком большой, шаг инициализации можно пропустить, rasterio сам заполнит nodata
 
-            # --- Глобальная статистика высот ---
-            # Чтобы нормализовать высоту (DSM) корректно, нам нужны мин/макс значения всего файла.
-            # Читаем уменьшенную копию (1/10 размера) для скорости.
-            print("Вычисляем статистику высот...")
-            dsm_overview = src_dsm.read(1, out_shape=(1, int(src_dsm.height // 10), int(src_dsm.width // 10)))
+            for y, x in tqdm(valid_coords, desc="Предсказание"):
+                window = Window(x, y, patch_size, patch_size)
 
-            # Фильтруем мусор (значения меньше -100)
-            valid_mask = dsm_overview > -100
-            if valid_mask.any():
-                dsm_min_global = np.min(dsm_overview[valid_mask])
-                dsm_max_global = np.max(dsm_overview[valid_mask])
-            else:
-                dsm_min_global, dsm_max_global = 0, 1
+                # Читаем с boundless=True (авто-паддинг нулями на краях)
+                img = src_img.read(window=window, boundless=True, fill_value=0)
+                img = img.transpose(1, 2, 0).astype(np.float32)
 
-            print(f"DSM Min: {dsm_min_global:.2f}, DSM Max: {dsm_max_global:.2f}")
+                dsm = src_dsm.read(1, window=window, boundless=True, fill_value=-9999).astype(np.float32)
 
-            # 4. Проход скользящим окном
-            for y in range(0, height, patch_size):
-                for x in range(0, width, patch_size):
-                    # Определяем реальный размер окна (на краях может быть меньше 256)
-                    window_h = min(patch_size, height - y)
-                    window_w = min(patch_size, width - x)
-                    window = Window(x, y, window_w, window_h)
+                # Нормализация
+                if np.max(img) > 255:
+                    img /= 65535.0
+                else:
+                    img /= 255.0
 
-                    # Читаем куски данных
-                    img_chunk = src_img.read(window=window).transpose(1, 2, 0).astype(np.float32)
-                    dsm_chunk = src_dsm.read(1, window=window).astype(np.float32)
+                dsm = np.clip(dsm, d_min, d_max)
+                if d_max - d_min > 0:
+                    dsm = (dsm - d_min) / (d_max - d_min)
+                else:
+                    dsm = np.zeros_like(dsm)
+                dsm = np.expand_dims(dsm, axis=2)
 
-                    # --- Нормализация Картинки ---
-                    # Если данные 16-битные, делим на 65535, если 8-битные — на 255
-                    if np.max(img_chunk) > 255:
-                        img_chunk /= 65535.0
-                    else:
-                        img_chunk /= 255.0
+                # Инференс
+                inp = np.concatenate((img, dsm), axis=2)
+                tensor = torch.from_numpy(inp.transpose(2, 0, 1)).float().unsqueeze(0).to(config.DEVICE)
 
-                    # --- Нормализация Высоты ---
-                    # Используем глобальные min/max, чтобы перепады высот сохранялись между патчами
-                    dsm_clean = np.clip(dsm_chunk, dsm_min_global, dsm_max_global)
-                    if dsm_max_global - dsm_min_global > 0:
-                        dsm_chunk = (dsm_clean - dsm_min_global) / (dsm_max_global - dsm_min_global)
-                    else:
-                        dsm_chunk = np.zeros_like(dsm_clean)
+                with torch.no_grad():
+                    out = model(tensor)
+                    pred = torch.argmax(out, dim=1).cpu().numpy()[0]
 
-                    # Добавляем измерение канала для высоты
-                    dsm_chunk = np.expand_dims(dsm_chunk, axis=2)
+                # Запись (обрезаем лишнее, если вышли за край при boundless чтении)
+                real_h = min(patch_size, src_img.height - y)
+                real_w = min(patch_size, src_img.width - x)
 
-                    # Склейка (Concat)
-                    input_chunk = np.concatenate((img_chunk, dsm_chunk), axis=2)
+                dst.write(pred[:real_h, :real_w].astype(rasterio.uint8), 1,
+                          window=Window(x, y, real_w, real_h))
 
-                    # Паддинг (Padding)
-                    # Если кусок меньше 256x256 (на краях карты), дополняем нулями
-                    if window_h < patch_size or window_w < patch_size:
-                        pad_h = patch_size - window_h
-                        pad_w = patch_size - window_w
-                        # pad только по высоте и ширине, каналы не трогаем
-                        input_chunk = np.pad(input_chunk, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
-
-                    # Перевод в тензор PyTorch
-                    tensor = torch.from_numpy(input_chunk.transpose(2, 0, 1)).float()
-                    tensor = tensor.unsqueeze(0).to(config.DEVICE)
-
-                    # --- ПРЕДСКАЗАНИЕ ---
-                    with torch.no_grad():
-                        output = model(tensor)
-                        # Берем индекс класса с максимальной вероятностью (Argmax)
-                        pred = torch.argmax(output, dim=1).cpu().numpy()[0]
-
-                    pred_cut = pred[:window_h, :window_w]
-
-                    # Записываем результат в файл
-                    dst.write(pred_cut.astype(rasterio.uint8), 1, window=window)
-
-                    pbar.update(1)
-
-            pbar.close()
+        if src_roi: src_roi.close()
 
     print(f"\n✅ Готово! Карта сохранена в: {OUTPUT_PATH}")
 

@@ -2,48 +2,87 @@ import numpy as np
 import rasterio
 from sklearn.utils.class_weight import compute_class_weight
 import config
+import sys
 
 
-def calculate_exact_weights():
-    print(f"Читаем маску: {config.MASK_PATH}")
+def calculate_weights_smart():
+    print("⚖️ --- УМНЫЙ РАСЧЕТ ВЕСОВ (Dr. Xu style) ---")
 
-    with rasterio.open(config.MASK_PATH) as src:
-        # Читаем маску
-        mask = src.read(1).flatten()
+    with rasterio.open(config.IMAGE_PATH) as src_img:
+        # Шаг 4 для ускорения (прореживание)
+        step = 4
+        h, w = src_img.height // step, src_img.width // step
+        print("⏳ Чтение изображения...")
+        # Читаем только 1 канал, чтобы понять где не пустота
+        img_data = src_img.read(1, out_shape=(1, h, w))
 
-    # Ищем уникальные классы (должны быть 0, 1, 2, 3, 4)
-    classes = np.unique(mask)
-    print(f"Найденные классы: {classes}")
+    with rasterio.open(config.MASK_PATH) as src_mask:
+        print("⏳ Чтение маски...")
+        mask_data = src_mask.read(1, out_shape=(1, h, w))
 
-    # Используем sklearn для расчета весов (методика 'balanced')
-    # Формула: n_samples / (n_classes * np.bincount(y))
-    weights = compute_class_weight(class_weight='balanced', classes=classes, y=mask)
+    # 1. Валидная область (где есть фото)
+    valid_pixels_mask = (img_data > 0)
+    target_labels = mask_data[valid_pixels_mask]
 
-    print("\n--- РЕКОМЕНДУЕМЫЕ ВЕСА (SKLEARN) ---")
-    print("-" * 40)
+    # Если в маске есть мусорные значения (например 255), уберем их, оставим 0..4
+    target_labels = target_labels[target_labels < config.NUM_CLASSES]
 
-    # Выводим красиво
-    for cls, w in zip(classes, weights):
-        print(f"Класс {cls}: {w:.4f}")
+    if target_labels.size == 0:
+        print("❌ Ошибка: Нет данных!")
+        return
 
-    print("-" * 40)
+    classes = np.unique(target_labels)
+    classes.sort()
+    print(f"🔎 Найденные классы: {classes}")
 
-    # Формируем строку для вставки в PyTorch
-    # ВАЖНО: Класс 0 (фон) мы обычно обнуляем вручную, если хотим его игнорировать
-    # Но sklearn посчитает вес и для него.
+    # 2. Считаем математически сбалансированные веса
+    weights = compute_class_weight(class_weight='balanced', classes=classes, y=target_labels)
 
-    final_weights = weights.copy()
-    final_weights[0] = 0.0  # Принудительно зануляем фон, чтобы убрать черную рамку
+    # Создаем словарь {class_id: weight}
+    weight_dict = {c: w for c, w in zip(classes, weights)}
 
-    # Нормализуем так, чтобы Асфальт (класс 1) был равен 1.0 (для удобства восприятия)
-    # Это не обязательно, но так понятнее
-    if len(final_weights) > 1:
-        factor = 1.0 / final_weights[1]
-        final_weights = final_weights * factor
+    # 3. Формируем итоговый список
+    final_weights = []
+    labels_map = {0: "Фон", 1: "Асфальт", 2: "Трава", 3: "Деревья", 4: "Кусты"}
 
-    print("\nКОПИРУЙ ЭТО В TRAIN.PY:")
-    print(f"class_weights = torch.tensor({list(np.round(final_weights, 2))}).to(config.DEVICE)")
+    for i in range(config.NUM_CLASSES):
+        if i == 0:
+            # --- ПРАВКА Dr. Xu ---
+            # Не 0.0! Даем вес 0.1, чтобы модель училась, что на фоне (зданиях)
+            # не должно быть растительности.
+            w = 0.1
+        elif i in weight_dict:
+            w = weight_dict[i]
+        else:
+            w = 1.0  # Если класса нет в выборке (редко)
+
+        final_weights.append(w)
+
+    final_weights = np.array(final_weights, dtype=np.float32)
+
+    # 4. Нормализация (чтобы средний вес был около 1.0)
+    # Исключаем фон из расчета среднего, чтобы он не перекашивал
+    mean_val = np.mean(final_weights[1:])
+    final_weights = final_weights / mean_val
+
+    # Фон снова фиксируем на 0.1 (или 0.2) от среднего уровня, если он улетел
+    final_weights[0] = 0.1
+
+    print("\n--- ГОТОВЫЙ РЕЗУЛЬТАТ ДЛЯ TRAIN.PY ---")
+    tensor_str = ", ".join([f"{w:.4f}" for w in final_weights])
+    print(f"class_weights = torch.tensor([{tensor_str}]).to(config.DEVICE)")
+    print("-" * 50)
+
+    for i, w in enumerate(final_weights):
+        name = labels_map.get(i, "?")
+        print(f"  {name:<10} (Id {i}): {w:.4f}")
+
+    # Совет
+    if final_weights[4] < final_weights[2]:
+        print("\n⚠️ ВНИМАНИЕ: Вес 'Кустов' (4) получился меньше веса 'Травы' (2).")
+        print("Это значит, кустов в разметке МНОГО. Если модель их путает,")
+        print("можно вручную поднять вес кустов в train.py (например, до 1.0-1.2).")
 
 
 if __name__ == "__main__":
-    calculate_exact_weights()
+    calculate_weights_smart()

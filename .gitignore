@@ -2,3 +2,4 @@ data
 src/check_classes.py
 .venv
 .idea
+*.pth

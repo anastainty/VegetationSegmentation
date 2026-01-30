@@ -2,4 +2,5 @@ data
 src/check_classes.py
 .venv
 .idea
-*.pth
+unet_best_f1_model.pth
+unet_vegetation_model.pth

@@ -4,3 +4,4 @@ src/check_classes.py
 .idea
 src/unet_best_f1_model.pth
 src/unet_vegetation_model.pth
+src/unet_spatial_split.pth

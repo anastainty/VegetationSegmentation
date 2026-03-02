@@ -14,7 +14,7 @@ from dataset import VegetationDataset
 from model import UNet
 
 # --- НАСТРОЙКИ ПОД НОВУЮ МОДЕЛЬ ---
-MODEL_FILENAME = "unet_best_f1_model.pth"
+MODEL_FILENAME = "unet_spatial_split.pth"
 # Порядок классов должен СТРОГО совпадать с train.py!
 CLASSES = ["Фон", "Асфальт", "Трава", "Деревья", "Кусты"]
 

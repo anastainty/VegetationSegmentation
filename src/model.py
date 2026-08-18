@@ -1,11 +1,33 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+
+
+class ECA_Module(nn.Module):
+    """Efficient Channel Attention (ECA) Module"""
+    def __init__(self, channels, b=1, gamma=2):
+        super(ECA_Module, self).__init__()
+        # Динамический расчет размера ядра свертки в зависимости от числа каналов
+        t = int(abs((math.log(channels, 2) + b) / gamma))
+        k_size = t if t % 2 else t + 1
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # x.shape: (Batch, Channels, Height, Width)
+        y = self.avg_pool(x)
+        # Подготавливаем тензор для 1D свертки
+        y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
+        y = self.sigmoid(y)
+        # Умножаем исходные признаки на веса внимания
+        return x * y.expand_as(x)
 
 
 class DoubleConv(nn.Module):
     """(conv => BN => ReLU) * 2"""
-
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.double_conv = nn.Sequential(
@@ -23,7 +45,6 @@ class DoubleConv(nn.Module):
 
 class Down(nn.Module):
     """Спуск"""
-
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
@@ -37,7 +58,6 @@ class Down(nn.Module):
 
 class Up(nn.Module):
     """Подъем"""
-
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
         if bilinear:
@@ -78,6 +98,14 @@ class UNet(nn.Module):
         self.down3 = Down(256, 512)
         factor = 2 if bilinear else 1
         self.down4 = Down(512, 1024 // factor)
+
+        # --- ИНИЦИАЛИЗАЦИЯ ECA МОДУЛЕЙ ДЛЯ КАЖДОГО УРОВНЯ ---
+        self.eca1 = ECA_Module(64)
+        self.eca2 = ECA_Module(128)
+        self.eca3 = ECA_Module(256)
+        self.eca4 = ECA_Module(512)
+        self.eca5 = ECA_Module(1024 // factor)
+
         self.up1 = Up(1024, 512 // factor, bilinear)
         self.up2 = Up(512, 256 // factor, bilinear)
         self.up3 = Up(256, 128 // factor, bilinear)
@@ -89,15 +117,26 @@ class UNet(nn.Module):
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
+        # Проход кодировщика (Encoder)
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
+
+        # --- ПРИМЕНЕНИЕ ECA МОДУЛЯ ПЕРЕД ПРОПУСКНЫМИ СОЕДИНЕНИЯМИ ---
+        # Фокусируем внимание на важных каналах (например, DSM и RedEdge)
+        x1_eca = self.eca1(x1)
+        x2_eca = self.eca2(x2)
+        x3_eca = self.eca3(x3)
+        x4_eca = self.eca4(x4)
+        x5_eca = self.eca5(x5)
+
+        # Проход декодировщика (Decoder)
+        x = self.up1(x5_eca, x4_eca)
+        x = self.up2(x, x3_eca)
+        x = self.up3(x, x2_eca)
+        x = self.up4(x, x1_eca)
 
         # Применяем Dropout перед выходом
         x = self.dropout(x)

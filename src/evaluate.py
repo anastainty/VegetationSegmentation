@@ -16,7 +16,7 @@ from model import UNet
 # --- НАСТРОЙКИ ПОД НОВУЮ МОДЕЛЬ ---
 MODEL_FILENAME = "unet_spatial_split.pth"
 # Порядок классов должен СТРОГО совпадать с train.py!
-CLASSES = ["Фон", "Асфальт", "Трава", "Деревья", "Кусты"]
+CLASSES = ["Background", "Asphalt", "Grass", "Trees", "Bushes"]
 
 
 def evaluate_model():
@@ -168,8 +168,8 @@ def evaluate_model():
     sns.heatmap(cm_normalized, annot=True, fmt=".2f", cmap="Greens",
                 xticklabels=CLASSES, yticklabels=CLASSES)
     plt.title(f"Confusion Matrix (Normalized)\nMean IoU: {mean_iou:.4f}")
-    plt.ylabel("Истинный класс (Ground Truth)")
-    plt.xlabel("Предсказанный класс (Prediction)")
+    plt.ylabel("Ground Truth")
+    plt.xlabel("Prediction")
     plt.tight_layout()
 
     plot_path = os.path.join(results_dir, "confusion_matrix.png")

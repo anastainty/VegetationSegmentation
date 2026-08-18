@@ -14,7 +14,7 @@ from dataset import VegetationDataset
 from model import UNet
 
 
-# --- FOCAL LOSS (Тот же, что и был) ---
+# --- FOCAL LOSS  ---
 class FocalLoss(nn.Module):
     def __init__(self, alpha=None, gamma=2.0, ignore_index=255):
         super(FocalLoss, self).__init__()
@@ -90,7 +90,7 @@ def train_spatial():
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=10, factor=0.5)
 
     best_f1 = 0.0
-    patience_limit = 25  # Чуть меньше, так как задача сложнее
+    patience_limit = 25
     patience_counter = 0
     history = {'train_loss': [], 'val_loss': [], 'val_f1': []}
 

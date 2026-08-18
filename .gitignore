@@ -6,3 +6,5 @@ src/unet_best_f1_model.pth
 src/unet_vegetation_model.pth
 src/unet_spatial_split.pth
 src2
+src/diploma_tables.docx
+src/generate_word.py
